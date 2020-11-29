@@ -13,24 +13,24 @@ SECONDS_PER_DAY = 86400 # number of seconds in day
 alpha = 0.1
 gamma = 0.8
 eps = 0.9
+actions_list_size = 21
+gamma_list_size = 21
+theta_list_size = 21
 
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
 window_size = 2 * 60 * 60
 
-# choice == True - False - traffic marked as malicious; choice == False - traffic marked as benign
+# choice == True - traffic marked as malicious; choice == False - traffic marked as benign
 class Event:
-    def __init__ (start, stop, choise): 
+    def __init__ (start, end, choise): 
         self.start = start
-        self.stop = stop
+        self.end = end
         self.choise = choise
 
 #data = [0.2, 0.3, 0.25, 0.249, 0.001]
 #data = [0.001, 0.999]
 #print (normalizedEntrophy (data))
-
-def reward (N_11, N_12, N_21, N_22):
-    return (P_0 - C_0) * N_11 - (C_0 + C_1) * N_12 - C_2 * N_21 + P_1 * N_22
 
 def gamma (N_11, N_21):
     return N_11 / (N_11 + N_21)
@@ -40,26 +40,52 @@ def theta (N_12, N_22):
 
 # only descrete number of states is available
 def getPossibleStates ():
-    possible_thetas = [state for state in np.arange (0.05, 1, 0.05)]
-    possible_gammas = [state for state in np.arange (0.05, 1, 0.05)]
+    possible_thetas = [state for state in np.arange (0, 1.05, 0.05)]
+    possible_gammas = [state for state in np.arange (0, 1.05, 0.05)]
     return (possible_gammas, possible_thetas)
 
 # only descrete number of actions (== theta values) is available
 def getPossibleActions ():
-    return [state for state in np.arange (0.05, 1, 0.05)]    
+    return [state for state in np.arange (0, 1.05, 0.05)]    
 
 def getInitialTheta (actions):
+    """
+    Get index of initial theta in actions list
+
+    Parameters
+    ----------
+    actions : list
+        The list of possible actions
+
+    Returns
+    -------
+    int
+        index in actions array        
+    """
     n = len (actions)
     ind = random.randint (0, n - 1)
-    return actions[ind]
+    return ind
 
 def getInitialState (states):
+    """
+    Get tuple of initial state indexes in gamma_arrray and theta_array
+
+    Parameters
+    ----------
+    actions : tuple of lists
+        (gamma_array, theta_array)
+
+    Returns
+    -------
+    tuple of int
+        tuple of initial state indexes in gamma_arrray and theta_array       
+    """
     length1 = len (states[0])
     length2 = len (states[1])
 
     ind1 = random.randint (0, length1 - 1)
     ind2 = random.randint (0, length2 - 1)
-    return (states[0][ind1], states[0][ind2])
+    return (ind1, ind2)
 
 def getEntropy (probs):
     ent = 0.0
@@ -88,39 +114,166 @@ def updateEntropyDict (df, entropy_dict, start_time, end_time):
 
     return entropy_dict
 
-def getCurrentState (df):
-    # TODO should be written
-    return 0
+# TODO Not tested
+def getEventsCounters (attack_df, events):
+    """
+    Returns the number of each type of events
+    n_11 - the number of authenticated true attacks
+    n_12 - the number of false alarms
+    n_21 - the number of real attacks, but missed
+    n_22 - the number of authenticated benign traffic flows
 
-def getTheta (state, q_table):
-    # TODO should be written
-    return 0
+    Parameters
+    ----------
+    attack_df : DataFrame
+        The data frame with infromation about attack. You should get it from .csv table
+    events : list of Event
+        The list of events for each time step  
 
-def convertToAction (theta):
-    # TODO should be written
-    return 0
+    Returns
+    -------
+    tuple
+        (n_11, n_12, n_21, n_22)        
+    """
+    n_11 = 0 
+    n_12 = 0 
+    n_21 = 0 
+    n_22 = 0 
+    for event in events:
+        is_attack = False
+        for ind in range (len(attack_df.index)):
+            # attack happened
+            if (event.start >= attack_df["start_time"][ind] 
+                and event.start < attack_df["end_time"][ind]) or
+               (event.end > attack_df["start_time"][ind]
+                and event.end <= attack_df["end_time"][ind]):
+                if event.choise == True:
+                    n_11 += 1
+                    is_attack = True
+                    break
+                else:
+                    n_21 += 1
+                    is_attack = True
+                    break
+        if is_attack:
+            continue
+        else:
+            if event.choise == True:
+                n_12 += 1
+            else:
+                n_22 += 1
+                
+    return (n_11, n_12, n_21, n_22)
 
-def GetReward (actions):
-    # TODO should be written
-    return 0
 
-def SecondMax (q_table, state):
-    # TODO should be written
-    return 0
+# TODO not tested
+def getReward (events_counters):
+    """
+    Returns the reward for given number of events
+        
+    Parameters
+    ----------
+    events_counters : tuple of int
+        (n_11, n_12, n_21, n_22)
+        n_11 - The number of authenticated true attacks
+        n_12 - The number of false alarms
+        n_21 - The number of real attacks, but missed
+        n_22 - The number of authenticated benign traffic flows
 
+    Returns
+    -------
+    int
+        Reward        
+    """
+    global P_0, P_1, C_0, C_1, C_2 
+    return (P_0 - C_0) * events_counters[0] - (C_0 + C_1) * events_counters[1] -
+           C_2 * events_counters[2] + P_1 * events_counters[3]
+
+# TODO Not tested
+def getCurrentState (events_counters, states):
+    """
+    Returns the the hit rate "gamma" and false alarm rate "theta"
+         
+    Parameters
+    ----------
+    events_counters : tuple of int
+        (n_11, n_12, n_21, n_22)
+        n_11 - The number of authenticated true attacks
+        n_12 - The number of false alarms
+        n_21 - The number of real attacks, but missed
+        n_22 - The number of authenticated benign traffic flows
+    states : tuple of two arrays
+        (gamma_array, theta_array) where gamma_array - possible gamma values,
+                                         theta_array - possible theta values
+
+    Returns
+    -------
+    tuple of int
+        (gamma index in gamma_array, theta index in theta_array)       
+    """
+    gamma_raw = float (n_11) / (float (n_11) + float (n_21)) 
+    theta_raw = float (n_12) / (float (n_12) + float (n_22))
+    min_dist1 = 1
+    target_ind1 = 0
+    min_dist1 = 1
+    target_ind2 = 0 
+    for ind1 in range (states[0]):
+        if math.fabs (states[0][ind1] - gamma_raw) <= min_dist1:
+            min_dist1 = math.fabs (states[0][ind1] - gamma_raw)
+            target_ind1 = ind1
+
+    for ind2 in range (states[1]):
+        if math.fabs (states[1][ind2] - theta_raw) <= min_dist2:
+            min_dist2 = math.fabs (states[1][ind2] - theta_raw)
+            target_ind2 = ind2
+    
+    return (target_ind1, target_ind2)
+
+# TODO Not tested
+def getTheta (q_table, state_ind):
+    """
+    Returns the index of the maximum action for state with state_ind with probability that
+    is equal to eps and the index of random action with probability that is equal to 1 - eps  
+         
+    Parameters
+    ----------
+    q_table : np.array
+        Q-table
+    state_ind : int
+        Number of state in Q-table 
+
+    Returns
+    -------
+    int
+        Index of appropriate actions       
+    """
+    global eps, actions_list_size
+
+    if (random.uniform (0, 1) < eps):
+        max_value = -100000000000
+        max_ind = 0
+        for ind in range (actions_list_size):
+            if q_table[state_ind][ind] > max_value:
+                max_ind = ind
+                max_value = q_table[ind]
+        return max_ind
+    else:
+        return random.randint (0, actions_list_size - 1)
 
 def plotThresholds (df, attack_df):
-    global alpha, gamma, eos, SECONDS_PER_DAY, episod_length, step_length, window_size
+    global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, window_size
+    global gamma_list_size, theta_list_size, actions_list_size
 
     # TODO (end_time - start_time) / episod_lensth (5 s) = episod_limit
     episod_limit = 250
     thresholds = []
     states = getPossibleStates ()
     actions = getPossibleActions ()
-    theta = getInitialTheta (actions)
-    state = getInitialState (states)
+    theta_ind = getInitialTheta (actions)
+    theta = actions[theta_ind]
+    state = getInitialState (states) # state is tuple of ind in gamma_array and theta_array
     thresholds.append (theta)
-    q_table = initializeQTable ()
+    q_table = np.zeros((gamma_list_size * theta_list_size, actions_list_size))
 
     # the window size will be one 1 hour or episod_length * 24.
     # When data collection time reaches 2 hours, the device will delete the data from the first hour
@@ -154,17 +307,22 @@ def plotThresholds (df, attack_df):
                 events.append (Event (time_now, next_step_time, True))
             else:
                 events.append (Event (time_now, next_step_time, False))
-        # TODO End of not tested part of the code
 
-        # Здесь я оставновился
-        reward = GetReward (attack_df, events)
+        events_counters = getEventsCounters (attack_df, events)
+        reward = getReward (events_counters)
         old_state = state
-        state = getCurrentState (events, enum_episod * episod_length,
-                                 (num_episod + 1) * episod_length)
-        q_table[state][action] = q_table[state][action] + alpha * (reward + 
-                             gamma * secondMax (q_table, state) - q_table[old_state][action])
-        theta = getTheta (state, q_table)
+        state = getCurrentState (events_counters, states)
+        q_table_state_ind = state[0] * theta_list_size + state[1]
+        q_table_state_ind_old = old_state[0] * theta_list_size + old_state[1]
+
+        q_table[q_table_state_ind_old][theta_ind] = q_table[q_table_state_ind_old][theta_ind] +
+        alpha * (reward + gamma * q_table.max (axis = 1)[q_table_state_ind] -
+        q_table[q_table_state_ind_old][theta_ind])
+
+        theta_ind = getTheta (q_table, q_table_state_ind)
+        theta = actions[theta_ind]
         thresholds.append (theta)
+        # TODO End of not tested part of the code
     
     return thresholds 
 
