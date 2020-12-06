@@ -2,6 +2,12 @@ import math
 import random
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+#from scapy.utils import RawPcapReader
+#from scapy.layers.l2 import Ether
+#from scapy.layers.inet import IP, TCP
+from scapy.all import *
+import sys
 
 P_0 = 14.0 #reward in case the attack was detected (detection and attack)
 P_1 = 12.0 #reward if (no attack and no detection)
@@ -12,41 +18,79 @@ SECONDS_PER_DAY = 86400 # number of seconds in day
 
 alpha = 0.1
 gamma = 0.8
-eps = 0.9
+eps = 0.999999
 actions_list_size = 21
-gamma_list_size = 21
-theta_list_size = 21
+gamma_list_size = 22
+theta_list_size = 22
 
+# TODO episod_limit = (end_time - start_time) / episod_lensth (5 s) = episod_limit
+episod_limit = 15
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
 window_size = 2 * 60 * 60
 
 # choice == True - traffic marked as malicious; choice == False - traffic marked as benign
 class Event:
-    def __init__ (start, end, choise): 
+    def __init__ (self, start, end, choise): 
         self.start = start
         self.end = end
         self.choise = choise
 
-#data = [0.2, 0.3, 0.25, 0.249, 0.001]
-#data = [0.001, 0.999]
-#print (normalizedEntrophy (data))
+def processPcap (input_pcap):
+    """
+    Parse .pcap file
 
-def gamma (N_11, N_21):
-    return N_11 / (N_11 + N_21)
+    Parameters
+    ----------
+    input_pcap : list
+        .pcap file to parse
 
-def theta (N_12, N_22):
-    return N_12 / (N_12 + N_22)
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame created from pcap file ('time' + 'value' columns)        
+    """
+    #pcap = rdpcap (input_pcap) 
+    numRows = 100018
+    df = pd.DataFrame(index=range(numRows), columns=['time', 'value'])
+    count = 0
+    start_time = 0
+    for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):
+        ether_pkt = Ether (pkt_data)
+        if 'type' not in ether_pkt.fields:
+            continue
+        if ether_pkt.type != 0x0800:
+            continue
+        ip_pkt = ether_pkt[IP]
+
+        if count % 10000 == 0:
+            print ("Process row = {}\n".format (count))
+
+        time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+        if count == 0:
+            start_time = time / 1000000
+        time = (time / 1000000) - start_time
+        df["time"][count] = time
+        df["value"][count] = ip_pkt.src
+        count += 1
+    print ("Pcap processed")
+    return df
+
+def parseAnnotation (filename):
+    df = pd.read_csv (filename)
+    df = df.rename (columns={str (df.columns[0]): "start_time", str (df.columns[1]): "end_time"})
+    return df
 
 # only descrete number of states is available
 def getPossibleStates ():
-    possible_thetas = [state for state in np.arange (0, 1.05, 0.05)]
-    possible_gammas = [state for state in np.arange (0, 1.05, 0.05)]
+    # -1000 is the case where gamma == 0 / 0 or theta == 0 / 0
+    possible_thetas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
+    possible_gammas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
     return (possible_gammas, possible_thetas)
 
 # only descrete number of actions (== theta values) is available
 def getPossibleActions ():
-    return [state for state in np.arange (0, 1.05, 0.05)]    
+    return [action for action in np.arange (0, 1.05, 0.05)]    
 
 def getInitialTheta (actions):
     """
@@ -106,12 +150,15 @@ def getNormalizedEntropy (probs):
 def updateEntropyDict (df, entropy_dict, start_time, end_time):
     new_df = pd.DataFrame ()
     if bool (entropy_dict): # dict is empty
-        new_df = df.loc[df['time'] >= start_time and df['time'] <= start_time]
+        new_df = df.loc[(df['time'] >= start_time) & (df['time'] <= end_time)]
     else:
-        new_df = df.loc[df['time'] > start_time and df['time'] <= start_time]
+        new_df = df.loc[(df['time'] > start_time) & (df['time'] <= end_time)]
     for value in new_df["value"]:
-        entropy_dict[value] += 1
-
+        if value in entropy_dict.keys():
+            entropy_dict[value] += 1
+        else:
+            entropy_dict[value] = 1
+            
     return entropy_dict
 
 # TODO Not tested
@@ -144,9 +191,9 @@ def getEventsCounters (attack_df, events):
         for ind in range (len(attack_df.index)):
             # attack happened
             if (event.start >= attack_df["start_time"][ind] 
-                and event.start < attack_df["end_time"][ind]) or
-               (event.end > attack_df["start_time"][ind]
-                and event.end <= attack_df["end_time"][ind]):
+                 and event.start < attack_df["end_time"][ind]) or (
+                 event.end > attack_df["start_time"][ind]
+                 and event.end <= attack_df["end_time"][ind]):
                 if event.choise == True:
                     n_11 += 1
                     is_attack = True
@@ -186,8 +233,8 @@ def getReward (events_counters):
         Reward        
     """
     global P_0, P_1, C_0, C_1, C_2 
-    return (P_0 - C_0) * events_counters[0] - (C_0 + C_1) * events_counters[1] -
-           C_2 * events_counters[2] + P_1 * events_counters[3]
+    return (P_0 - C_0) * events_counters[0] - (C_0 + C_1) * events_counters[1] - (
+           C_2 * events_counters[2] + P_1 * events_counters[3])
 
 # TODO Not tested
 def getCurrentState (events_counters, states):
@@ -211,18 +258,28 @@ def getCurrentState (events_counters, states):
     tuple of int
         (gamma index in gamma_array, theta index in theta_array)       
     """
-    gamma_raw = float (n_11) / (float (n_11) + float (n_21)) 
-    theta_raw = float (n_12) / (float (n_12) + float (n_22))
+    gamma_raw = 0
+    if events_counters[0] + events_counters[2] == 0:
+        gamma_raw = -1000
+    else:
+        gamma_raw = float (events_counters[0]) / (float (events_counters[0]) +
+                    float (events_counters[2])) 
+
+    if events_counters[1] + events_counters[3] == 0:
+        theta_raw = -1000
+    else:                
+        theta_raw = float (events_counters[1]) / (float (events_counters[1]) +
+                    float (events_counters[3]))
     min_dist1 = 1
     target_ind1 = 0
-    min_dist1 = 1
+    min_dist2 = 1
     target_ind2 = 0 
-    for ind1 in range (states[0]):
+    for ind1 in range (len (states[0])):
         if math.fabs (states[0][ind1] - gamma_raw) <= min_dist1:
             min_dist1 = math.fabs (states[0][ind1] - gamma_raw)
             target_ind1 = ind1
 
-    for ind2 in range (states[1]):
+    for ind2 in range (len (states[1])):
         if math.fabs (states[1][ind2] - theta_raw) <= min_dist2:
             min_dist2 = math.fabs (states[1][ind2] - theta_raw)
             target_ind2 = ind2
@@ -252,20 +309,20 @@ def getTheta (q_table, state_ind):
     if (random.uniform (0, 1) < eps):
         max_value = -100000000000
         max_ind = 0
-        for ind in range (actions_list_size):
-            if q_table[state_ind][ind] > max_value:
-                max_ind = ind
-                max_value = q_table[ind]
-        return max_ind
+        max_ind_array = np.where (q_table[state_ind] == np.amax (q_table[state_ind]))
+        max_ind_ind = random.randint (0, len (max_ind_array) - 1)
+        #for ind in range (actions_list_size):
+        #    if q_table[state_ind][ind] > max_value:
+        #        max_ind = ind
+        #        max_value = q_table[ind]
+        return max_ind_array[0][max_ind_ind]
     else:
         return random.randint (0, actions_list_size - 1)
 
-def plotThresholds (df, attack_df):
-    global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, window_size
+def getThresholds (df, attack_df):
+    global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, window_size, episod_limit
     global gamma_list_size, theta_list_size, actions_list_size
 
-    # TODO (end_time - start_time) / episod_lensth (5 s) = episod_limit
-    episod_limit = 250
     thresholds = []
     states = getPossibleStates ()
     actions = getPossibleActions ()
@@ -288,22 +345,22 @@ def plotThresholds (df, attack_df):
         for ind in range (0, episod_length, step_length):
 
             time_now = num_episod * episod_length + ind * step_length
-            next_step_time = num_episod * episod_length + ind * (step_length + 1)
+            next_step_time = num_episod * episod_length + (ind + 1) * step_length
             diff = time_now - deleted_data_time
             if diff < window_size / 2:
-                first_hour_dict = updateEntropyDict (first_hour_dict)
+                first_hour_dict = updateEntropyDict (df, first_hour_dict, time_now, next_step_time)
             elif diff < window_size:
-                second_hour_dict = updateEntropyDict (second_hour_dict)
+                second_hour_dict = updateEntropyDict (df, second_hour_dict, time_now, next_step_time)
             else:
                 deleted_data_time += window_size / 2
                 for key in first_hour_dict:
                     entropy_dict[key] -= first_hour_dict[key]
                     assert entropy_dict[key] >= 0
                 first_hour_dict = second_hour_dict
-                second_hour_dict = dict () 
-            
+                second_hour_dict = dict ()
+
             entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_step_time)
-            if getNormalizedEntrophy (entropy_dict) < theta:
+            if getNormalizedEntropy (entropy_dict) < theta:
                 events.append (Event (time_now, next_step_time, True))
             else:
                 events.append (Event (time_now, next_step_time, False))
@@ -315,9 +372,9 @@ def plotThresholds (df, attack_df):
         q_table_state_ind = state[0] * theta_list_size + state[1]
         q_table_state_ind_old = old_state[0] * theta_list_size + old_state[1]
 
-        q_table[q_table_state_ind_old][theta_ind] = q_table[q_table_state_ind_old][theta_ind] +
-        alpha * (reward + gamma * q_table.max (axis = 1)[q_table_state_ind] -
-        q_table[q_table_state_ind_old][theta_ind])
+        q_table[q_table_state_ind_old][theta_ind] = q_table[q_table_state_ind_old][theta_ind] + (
+        alpha * (reward + gamma * q_table.max (axis = 1)[q_table_state_ind] - (
+        q_table[q_table_state_ind_old][theta_ind])))
 
         theta_ind = getTheta (q_table, q_table_state_ind)
         theta = actions[theta_ind]
@@ -326,15 +383,36 @@ def plotThresholds (df, attack_df):
     
     return thresholds 
 
-
+def plotThresholds (df, attack_df):
+    """
+    Plot threshold (time) figure
+         
+    Parameters
+    ----------
+    df : DataFrame
+        DataFrame to analyze
+    attack_df : DataFrame
+        DataFrame with information about attacks        
+    """   
+    global episod_limit
+    thresholds = getThresholds (df, attack_df)
+    plt.plot(np.arange (0, episod_limit + 2, 1), thresholds, marker = 'None',
+             linestyle = '-', color = 'k', label = 'Threshold')
+    plt.xlabel('Time')
+    plt.ylabel('Threshold')
+    plt.grid()
+    plt.legend(loc='best')
+    plt.savefig("figures/threshold.png")
 
 def createUtilityHistogram ():
     # TODO Should be written
     pass
 
-def doAllPlots (df):
-    plotThresholds (df)
-    createUtilityHistogram ()  
+def doAllPlots ():
+    df = processPcap ("18-10-27-short.pcap")
+    attack_df = parseAnnotation ("50c7bf005639.csv")
+    plotThresholds (df, attack_df)
+    #createUtilityHistogram ()  
     pass
 
 # possible state values
@@ -344,4 +422,4 @@ def doAllPlots (df):
 
 
 
-#doAllPlots (df)
+doAllPlots ()
