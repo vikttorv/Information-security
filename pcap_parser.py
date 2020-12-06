@@ -15,6 +15,7 @@ def process_pcap(input_pcap, output):
         if 'type' not in ether_pkt.fields:
             continue
         if ether_pkt.type != 0x0800:
+            print ("Here\n")
             continue
 
         ip_pkt = ether_pkt[IP]

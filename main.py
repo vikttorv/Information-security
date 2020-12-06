@@ -18,7 +18,7 @@ SECONDS_PER_DAY = 86400 # number of seconds in day
 
 alpha = 0.1
 gamma = 0.8
-eps = 0.999999
+eps = 0.9
 actions_list_size = 21
 gamma_list_size = 22
 theta_list_size = 22
@@ -57,21 +57,39 @@ def processPcap (input_pcap):
     start_time = 0
     for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):
         ether_pkt = Ether (pkt_data)
-        if 'type' not in ether_pkt.fields:
+        if ether_pkt.dst != "50:c7:bf:00:56:39":
             continue
-        if ether_pkt.type != 0x0800:
-            continue
-        ip_pkt = ether_pkt[IP]
+        else:
+            print ("Here")
+        if IPv6 in ether_pkt:            
+            ipv6_pkt = ether_pkt[IPv6]
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if count == 0:
+                start_time = time / 1000000
+            time = (time / 1000000) - start_time
+            df["time"][count] = time
+            df["value"][count] = ipv6_pkt.src
+        elif IP in ether_pkt:
+            ip_pkt = ether_pkt[IP] 
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if count == 0:
+                start_time = time / 1000000
+            time = (time / 1000000) - start_time
+            df["time"][count] = time
+            df["value"][count] = ip_pkt.src
+        elif ARP in ether_pkt:
+            arp_pkt = ether_pkt[ARP]
+            if arp_pkt.psrc == "0.0.0.0":
+                continue 
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if count == 0:
+                start_time = time / 1000000
+            time = (time / 1000000) - start_time
+            df["time"][count] = time
+            df["value"][count] = arp_pkt.psrc
 
         if count % 10000 == 0:
             print ("Process row = {}\n".format (count))
-
-        time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-        if count == 0:
-            start_time = time / 1000000
-        time = (time / 1000000) - start_time
-        df["time"][count] = time
-        df["value"][count] = ip_pkt.src
         count += 1
     print ("Pcap processed")
     return df
