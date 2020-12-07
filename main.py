@@ -25,7 +25,7 @@ gamma_list_size = 22
 theta_list_size = 22
 
 # TODO episod_limit = (end_time - start_time) / episod_lensth (5 s) = episod_limit
-episod_limit = 15
+episod_limit = 18
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
 window_size = 2 * 60 * 60
@@ -37,6 +37,21 @@ class Event:
         self.start = start
         self.end = end
         self.choise = choise
+
+def get_real_num_rows (input_pcap):
+    num_rows = 0
+    for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):   
+        ether_pkt = Ether (pkt_data)
+        if ether_pkt.dst != "00:16:6c:ab:6b:88":
+            continue 
+        if IPv6 in ether_pkt:       
+            num_rows += 1
+        elif IP in ether_pkt:
+            num_rows += 1
+        elif ARP in ether_pkt:
+            num_rows += 1
+    return num_rows
+
 
 def processPcap (input_pcap):
     """
@@ -54,51 +69,49 @@ def processPcap (input_pcap):
     """
     #pcap = rdpcap (input_pcap) 
     global GLOBAL_START_TIME
-    numRows = 100018
+    numRows = get_real_num_rows (input_pcap)
+    print (numRows)
     df = pd.DataFrame(index=range(numRows), columns=['time', 'value'])
+    is_start_time_set = False
     count = 0
     for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):
+        time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+        if not is_start_time_set:
+            GLOBAL_START_TIME = time / 1000000
+            is_start_time_set = True
+
         ether_pkt = Ether (pkt_data)
         if ether_pkt.dst != "00:16:6c:ab:6b:88":
             continue
-        if IPv6 in ether_pkt:            
+        if IPv6 in ether_pkt:       
             ipv6_pkt = ether_pkt[IPv6]
-            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-            if count == 0:
-                GLOBAL_START_TIME = time / 1000000
             time = (time / 1000000) - GLOBAL_START_TIME
             df["time"][count] = time
             df["value"][count] = ipv6_pkt.src
+            count += 1
         elif IP in ether_pkt:
             ip_pkt = ether_pkt[IP] 
-            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-            if count == 0:
-                GLOBAL_START_TIME = time / 1000000
             time = (time / 1000000) - GLOBAL_START_TIME
             df["time"][count] = time
             df["value"][count] = ip_pkt.src
+            count += 1
         elif ARP in ether_pkt:
             arp_pkt = ether_pkt[ARP]
             if arp_pkt.psrc == "0.0.0.0":
                 continue 
-            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-            if count == 0:
-                GLOBAL_START_TIME = time / 1000000
             time = (time / 1000000) - GLOBAL_START_TIME
             df["time"][count] = time
             df["value"][count] = arp_pkt.psrc
+            count += 1
 
-        if count % 10000 == 0:
-            print ("Process row = {}\n".format (count))
-        count += 1
     print ("Pcap processed")
     return df
 
 def parseAnnotation (filename):
     df = pd.read_csv (filename)
     df = df.rename (columns={str (df.columns[0]): "start_time", str (df.columns[1]): "end_time"})
-    df["start_time"] = (df["start_time"] / 1000000) - GLOBAL_START_TIME
-    df["end_time"] = (df["end_time"] / 1000000) - GLOBAL_START_TIME
+    df["start_time"] = df["start_time"] - GLOBAL_START_TIME
+    df["end_time"] = df["end_time"] - GLOBAL_START_TIME
     return df
 
 # only descrete number of states is available
@@ -401,7 +414,6 @@ def getThresholds (df, attack_df):
                     assert entropy_dict[key] >= 0
                 first_hour_dict = second_hour_dict
                 second_hour_dict = dict ()
-
             entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_step_time)
             if len (entropy_dict) == 0 or len (entropy_dict) == 1:
                 pass
@@ -429,7 +441,6 @@ def getThresholds (df, attack_df):
 
         thresholds.append (theta)
         # TODO End of not tested part of the code
-    
     return thresholds 
 
 def plotThresholds (df, attack_df):
@@ -458,8 +469,8 @@ def createUtilityHistogram ():
     pass
 
 def doAllPlots ():
-    df = processPcap ("18-10-27-short.pcap")
-    attack_df = parseAnnotation ("50c7bf005639.csv")
+    df = processPcap ("18-06-01-short.pcap")
+    attack_df = parseAnnotation ("00166cab6b88.csv")
     plotThresholds (df, attack_df)
     #createUtilityHistogram ()  
     pass
