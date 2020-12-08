@@ -9,6 +9,44 @@ import matplotlib.pyplot as plt
 from scapy.all import *
 import sys
 
+
+# old method saved. Please don't delete it before our presentation.
+"""
+        for ind in range (0, episod_length, step_length):
+            time_now = num_episod * episod_length + ind 
+            next_step_time = num_episod * episod_length + ind + step_length
+            diff = time_now - deleted_data_time
+            
+            if diff < episod_length:
+                first_hour_dict = updateEntropyDict (df, first_hour_dict, time_now, next_step_time)
+            elif diff < 2 * episod_length:
+                second_hour_dict = updateEntropyDict (df, second_hour_dict, time_now, next_step_time)
+            else:
+                second_hour_dict = updateEntropyDict (df, second_hour_dict, time_now, next_step_time)
+                deleted_data_time += episod_length
+                for key in first_hour_dict:
+                    entropy_dict[key] -= first_hour_dict[key]
+                    assert entropy_dict[key] >= 0
+                print ("Here")
+                first_hour_dict = second_hour_dict
+                second_hour_dict = dict ()
+            
+            entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_step_time)
+            if len (entropy_dict) == 0 or len (entropy_dict) == 1:
+                pass
+            elif getNormalizedEntropy (entropy_dict) < theta:
+                print (getNormalizedEntropy (entropy_dict))
+                events.append (Event (time_now, next_step_time, True))
+            else:
+                print (getNormalizedEntropy (entropy_dict))
+                events.append (Event (time_now, next_step_time, False))
+"""
+
+
+
+
+
+
 P_0 = 14 #reward in case the attack was detected (detection and attack)
 P_1 = 12 #reward if (no attack and no detection)
 C_0 = 0 #penalty for sending an alarm
@@ -20,15 +58,15 @@ GLOBAL_START_TIME = 0
 alpha = 0.1
 gamma = 0.8
 eps = 0.9
-actions_list_size = 21
-gamma_list_size = 22
-theta_list_size = 22
+actions_list_size = 51
+gamma_list_size = 52
+theta_list_size = 52
 
-# TODO episod_limit = (end_time - start_time) / episod_lensth (5 s) = episod_limit
-episod_limit = 18
+
+episod_limit = 0
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
-window_size = 2 * 60 * 60
+#window_size = 2 * 60 * 60
 
 
 # choice == True - traffic marked as malicious; choice == False - traffic marked as benign
@@ -39,18 +77,32 @@ class Event:
         self.choise = choise
 
 def get_real_num_rows (input_pcap):
+    global episod_limit
     num_rows = 0
-    for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):   
+    max_time_unix = 0
+    for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):  
+        if max_time_unix == 0:
+            max_time_unix =  ((pkt_metadata.tshigh << 32) | pkt_metadata.tslow) / 1000000
         ether_pkt = Ether (pkt_data)
         if ether_pkt.dst != "00:16:6c:ab:6b:88":
             continue 
-        if IPv6 in ether_pkt:       
-            num_rows += 1
+        #if IPv6 in ether_pkt:
+        #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+        #    if max_time_unix < time:
+        #        max_time_unix = time / 1000000
+        #    num_rows += 1       
         elif IP in ether_pkt:
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if max_time_unix < time:
+                max_time_unix = time / 1000000
             num_rows += 1
-        elif ARP in ether_pkt:
-            num_rows += 1
-    return num_rows
+        #elif ARP in ether_pkt:
+        #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+        #    if max_time_unix < time:
+        #        max_time_unix = time / 1000000
+        #    num_rows += 1
+
+    return (num_rows, max_time_unix)
 
 
 def processPcap (input_pcap):
@@ -68,41 +120,46 @@ def processPcap (input_pcap):
         DataFrame created from pcap file ('time' + 'value' columns)        
     """
     #pcap = rdpcap (input_pcap) 
-    global GLOBAL_START_TIME
-    numRows = get_real_num_rows (input_pcap)
-    print (numRows)
-    df = pd.DataFrame(index=range(numRows), columns=['time', 'value'])
+    global GLOBAL_START_TIME, episod_limit
+    ret = get_real_num_rows (input_pcap)
+    num_rows = ret[0]
+    end_time_unix = ret[1]
+    print ("num_rows = {}; end time unix = {}".format (num_rows, end_time_unix))
+    print (num_rows)
+    df = pd.DataFrame(index=range (num_rows), columns=['time', 'value'])
     is_start_time_set = False
     count = 0
     for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):
         time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
         if not is_start_time_set:
             GLOBAL_START_TIME = time / 1000000
+            episod_limit = math.ceil ((end_time_unix - GLOBAL_START_TIME) / episod_length)
+            print (episod_limit)
             is_start_time_set = True
 
         ether_pkt = Ether (pkt_data)
         if ether_pkt.dst != "00:16:6c:ab:6b:88":
             continue
-        if IPv6 in ether_pkt:       
-            ipv6_pkt = ether_pkt[IPv6]
-            time = (time / 1000000) - GLOBAL_START_TIME
-            df["time"][count] = time
-            df["value"][count] = ipv6_pkt.src
-            count += 1
+        #if IPv6 in ether_pkt:       
+        #    ipv6_pkt = ether_pkt[IPv6]
+        #    time = (time / 1000000) - GLOBAL_START_TIME
+        #    df["time"][count] = time
+        #    df["value"][count] = ipv6_pkt.src
+        #    count += 1
         elif IP in ether_pkt:
             ip_pkt = ether_pkt[IP] 
             time = (time / 1000000) - GLOBAL_START_TIME
             df["time"][count] = time
             df["value"][count] = ip_pkt.src
             count += 1
-        elif ARP in ether_pkt:
-            arp_pkt = ether_pkt[ARP]
-            if arp_pkt.psrc == "0.0.0.0":
-                continue 
-            time = (time / 1000000) - GLOBAL_START_TIME
-            df["time"][count] = time
-            df["value"][count] = arp_pkt.psrc
-            count += 1
+        #elif ARP in ether_pkt:
+        #    arp_pkt = ether_pkt[ARP]
+        #    if arp_pkt.psrc == "0.0.0.0":
+        #        continue 
+        #    time = (time / 1000000) - GLOBAL_START_TIME
+        #    df["time"][count] = time
+        #    df["value"][count] = arp_pkt.psrc
+        #   count += 1
 
     print ("Pcap processed")
     return df
@@ -117,13 +174,13 @@ def parseAnnotation (filename):
 # only descrete number of states is available
 def getPossibleStates ():
     # -1000 is the case where gamma == 0 / 0 or theta == 0 / 0
-    possible_thetas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
-    possible_gammas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
+    possible_thetas = [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
+    possible_gammas = [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
     return (possible_gammas, possible_thetas)
 
 # only descrete number of actions (== theta values) is available
 def getPossibleActions ():
-    return [action for action in np.arange (0, 1.05, 0.05)]    
+    return [action for action in np.arange (0, 1.02, 0.02)]    
 
 def getInitialTheta (actions):
     """
@@ -141,7 +198,7 @@ def getInitialTheta (actions):
     """
     #n = len (actions)
     #ind = random.randint (0, n - 1)
-    return 14
+    return 35
 
 def getInitialState (states):
     """
@@ -377,7 +434,7 @@ def getTheta (q_table, state_ind, old_theta_ind):
             return random.randint (min_dist_ind - 1, min_dist_ind + 1)
 
 def getThresholds (df, attack_df):
-    global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, window_size, episod_limit
+    global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, episod_limit
     global gamma_list_size, theta_list_size, actions_list_size
 
     thresholds = []
@@ -395,32 +452,22 @@ def getThresholds (df, attack_df):
     second_hour_dict = dict ()
     entropy_dict = dict ()
     deleted_data_time = 0 # all data before this time were deleted
+    events = []    
 
     # TODO Slicing window should be tested better or larger data set
     for num_episod in range (0, episod_limit + 1, 1):
-        events = []
-        for ind in range (0, episod_length, step_length):
-            time_now = num_episod * episod_length + ind 
-            next_step_time = num_episod * episod_length + ind + step_length
-            diff = time_now - deleted_data_time
-            if diff < window_size / 2:
-                first_hour_dict = updateEntropyDict (df, first_hour_dict, time_now, next_step_time)
-            elif diff < window_size:
-                second_hour_dict = updateEntropyDict (df, second_hour_dict, time_now, next_step_time)
-            else:
-                deleted_data_time += window_size / 2
-                for key in first_hour_dict:
-                    entropy_dict[key] -= first_hour_dict[key]
-                    assert entropy_dict[key] >= 0
-                first_hour_dict = second_hour_dict
-                second_hour_dict = dict ()
-            entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_step_time)
-            if len (entropy_dict) == 0 or len (entropy_dict) == 1:
-                pass
-            elif getNormalizedEntropy (entropy_dict) < theta:
-                events.append (Event (time_now, next_step_time, True))
-            else:
-                events.append (Event (time_now, next_step_time, False))
+        entropy_dict = dict ()
+        time_now = num_episod * episod_length 
+        next_episod_time = (num_episod + 1) * episod_length    
+        entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_episod_time)
+        if len (entropy_dict) == 0 or len (entropy_dict) == 1:
+            pass
+        elif getNormalizedEntropy (entropy_dict) < theta:
+            events.append (Event (time_now, next_episod_time, True))
+            print (getNormalizedEntropy (entropy_dict))
+        else:
+            events.append (Event (time_now, next_episod_time, False))
+            print (getNormalizedEntropy (entropy_dict))
 
         events_counters = getEventsCounters (attack_df, events)
         if events_counters == (0, 0, 0, 0):
