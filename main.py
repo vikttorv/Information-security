@@ -96,11 +96,11 @@ def get_real_num_rows (input_pcap):
             if max_time_unix < time:
                 max_time_unix = time / 1000000
             num_rows += 1
-        #elif ARP in ether_pkt:
-        #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-        #    if max_time_unix < time:
-        #        max_time_unix = time / 1000000
-        #    num_rows += 1
+        elif ARP in ether_pkt:
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if max_time_unix < time:
+                max_time_unix = time / 1000000
+            num_rows += 1
 
     return (num_rows, max_time_unix)
 
@@ -167,25 +167,25 @@ def processPcap (input_pcap):
                 df["time"][count] = time
                 df["value"][count] = ip_pkt.dst
                 count += 1   
-        """             
+                     
         elif ARP in ether_pkt:
             if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
                 arp_pkt = ether_pkt[ARP]
-                if arp_pkt.psrc == "0.0.0.0":
-                    continue 
+                #if arp_pkt.psrc == "0.0.0.0":
+                #    continue 
                 time = (time / 1000000) - GLOBAL_START_TIME
                 df["time"][count] = time
                 df["value"][count] = arp_pkt.psrc
                 count += 1
             else:
                 arp_pkt = ether_pkt[ARP]
-                if arp_pkt.psrc == "0.0.0.0":
-                    continue 
+                #if arp_pkt.psrc == "0.0.0.0":
+                #    continue 
                 time = (time / 1000000) - GLOBAL_START_TIME
                 df["time"][count] = time
                 df["value"][count] = arp_pkt.pdst
                 count += 1
-        """ 
+         
 
     print ("Pcap processed")
     return df
@@ -482,7 +482,7 @@ def getEntropyValues (df, attack_df):
 def plotEntropy (df, attack_df):
     global episod_limit
     thresholds = getEntropyValues (df, attack_df)
-    plt.plot(np.arange (0, episod_limit + 1, 1), thresholds, marker = 'None',
+    plt.plot(np.arange (1, episod_limit + 2, 1), thresholds, marker = 'None',
              linestyle = '-', color = 'k', label = 'Entropy')
     plt.xlabel('Time')
     plt.ylabel('Entropy')
