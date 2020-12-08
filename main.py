@@ -84,13 +84,13 @@ def get_real_num_rows (input_pcap):
         if max_time_unix == 0:
             max_time_unix =  ((pkt_metadata.tshigh << 32) | pkt_metadata.tslow) / 1000000
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.dst != "00:16:6c:ab:6b:88":
+        if ether_pkt.dst != "00:16:6c:ab:6b:88" and ether_pkt.src != "00:16:6c:ab:6b:88":
             continue 
-        if IPv6 in ether_pkt:
-            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-            if max_time_unix < time:
-                max_time_unix = time / 1000000
-            num_rows += 1       
+        #if IPv6 in ether_pkt:
+        #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+        #    if max_time_unix < time:
+        #        max_time_unix = time / 1000000
+        #    num_rows += 1       
         elif IP in ether_pkt:
             time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
             if max_time_unix < time:
@@ -138,28 +138,54 @@ def processPcap (input_pcap):
             is_start_time_set = True
 
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.dst != "00:16:6c:ab:6b:88":
+        if ether_pkt.dst != "00:16:6c:ab:6b:88" and ether_pkt.src != "00:16:6c:ab:6b:88":
             continue
-        if IPv6 in ether_pkt:       
-            ipv6_pkt = ether_pkt[IPv6]
-            time = (time / 1000000) - GLOBAL_START_TIME
-            df["time"][count] = time
-            df["value"][count] = ipv6_pkt.src
-            count += 1
+        #if IPv6 in ether_pkt:     
+        #    if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
+        #        ipv6_pkt = ether_pkt[IPv6]
+        #        time = (time / 1000000) - GLOBAL_START_TIME
+        #        df["time"][count] = time
+        #        df["value"][count] = ipv6_pkt.src
+        #        count += 1
+        #    else:
+        #        ipv6_pkt = ether_pkt[IPv6]
+        #        time = (time / 1000000) - GLOBAL_START_TIME
+        #        df["time"][count] = time
+        #        df["value"][count] = ipv6_pkt.dst
+        #        count += 1
+
         elif IP in ether_pkt:
-            ip_pkt = ether_pkt[IP] 
-            time = (time / 1000000) - GLOBAL_START_TIME
-            df["time"][count] = time
-            df["value"][count] = ip_pkt.src
-            count += 1
-        #elif ARP in ether_pkt:
-        #    arp_pkt = ether_pkt[ARP]
-        #    if arp_pkt.psrc == "0.0.0.0":
-        #        continue 
-        #    time = (time / 1000000) - GLOBAL_START_TIME
-        #    df["time"][count] = time
-        #    df["value"][count] = arp_pkt.psrc
-        #   count += 1
+            if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
+                ip_pkt = ether_pkt[IP] 
+                time = (time / 1000000) - GLOBAL_START_TIME
+                df["time"][count] = time
+                df["value"][count] = ip_pkt.src
+                count += 1
+            else:
+                ip_pkt = ether_pkt[IP] 
+                time = (time / 1000000) - GLOBAL_START_TIME
+                df["time"][count] = time
+                df["value"][count] = ip_pkt.dst
+                count += 1   
+        """             
+        elif ARP in ether_pkt:
+            if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
+                arp_pkt = ether_pkt[ARP]
+                if arp_pkt.psrc == "0.0.0.0":
+                    continue 
+                time = (time / 1000000) - GLOBAL_START_TIME
+                df["time"][count] = time
+                df["value"][count] = arp_pkt.psrc
+                count += 1
+            else:
+                arp_pkt = ether_pkt[ARP]
+                if arp_pkt.psrc == "0.0.0.0":
+                    continue 
+                time = (time / 1000000) - GLOBAL_START_TIME
+                df["time"][count] = time
+                df["value"][count] = arp_pkt.pdst
+                count += 1
+        """ 
 
     print ("Pcap processed")
     return df
