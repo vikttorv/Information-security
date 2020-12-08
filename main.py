@@ -86,11 +86,11 @@ def get_real_num_rows (input_pcap):
         ether_pkt = Ether (pkt_data)
         if ether_pkt.dst != "00:16:6c:ab:6b:88":
             continue 
-        #if IPv6 in ether_pkt:
-        #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
-        #    if max_time_unix < time:
-        #        max_time_unix = time / 1000000
-        #    num_rows += 1       
+        if IPv6 in ether_pkt:
+            time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
+            if max_time_unix < time:
+                max_time_unix = time / 1000000
+            num_rows += 1       
         elif IP in ether_pkt:
             time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
             if max_time_unix < time:
@@ -140,12 +140,12 @@ def processPcap (input_pcap):
         ether_pkt = Ether (pkt_data)
         if ether_pkt.dst != "00:16:6c:ab:6b:88":
             continue
-        #if IPv6 in ether_pkt:       
-        #    ipv6_pkt = ether_pkt[IPv6]
-        #    time = (time / 1000000) - GLOBAL_START_TIME
-        #    df["time"][count] = time
-        #    df["value"][count] = ipv6_pkt.src
-        #    count += 1
+        if IPv6 in ether_pkt:       
+            ipv6_pkt = ether_pkt[IPv6]
+            time = (time / 1000000) - GLOBAL_START_TIME
+            df["time"][count] = time
+            df["value"][count] = ipv6_pkt.src
+            count += 1
         elif IP in ether_pkt:
             ip_pkt = ether_pkt[IP] 
             time = (time / 1000000) - GLOBAL_START_TIME
@@ -433,6 +433,38 @@ def getTheta (q_table, state_ind, old_theta_ind):
         else:
             return random.randint (min_dist_ind - 1, min_dist_ind + 1)
 
+def getEntropyValues (df, attack_df):
+    global episod_limit
+
+    entropy_values = []
+    for num_episod in range (0, episod_limit + 1, 1):
+        entropy_dict = dict ()
+        time_now = num_episod * episod_length 
+        next_episod_time = (num_episod + 1) * episod_length    
+        entropy_dict = updateEntropyDict (df, entropy_dict, time_now, next_episod_time)
+
+        if len (entropy_dict) == 0 or len (entropy_dict) == 1:
+            if len (entropy_values) != 0:
+                entropy_values.append (entropy_values[num_episod - 1])
+            else:
+                entropy_values.append (0)
+        else:
+            entropy_values.append (getNormalizedEntropy (entropy_dict))
+
+    return entropy_values
+
+def plotEntropy (df, attack_df):
+    global episod_limit
+    thresholds = getEntropyValues (df, attack_df)
+    plt.plot(np.arange (0, episod_limit + 1, 1), thresholds, marker = 'None',
+             linestyle = '-', color = 'k', label = 'Entropy')
+    plt.xlabel('Time')
+    plt.ylabel('Entropy')
+    plt.grid()
+    plt.legend(loc='best')
+    plt.savefig("figures/entropy.png")    
+
+
 def getThresholds (df, attack_df):
     global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, episod_limit
     global gamma_list_size, theta_list_size, actions_list_size
@@ -454,7 +486,6 @@ def getThresholds (df, attack_df):
     deleted_data_time = 0 # all data before this time were deleted
     events = []    
 
-    # TODO Slicing window should be tested better or larger data set
     for num_episod in range (0, episod_limit + 1, 1):
         entropy_dict = dict ()
         time_now = num_episod * episod_length 
@@ -487,7 +518,6 @@ def getThresholds (df, attack_df):
             theta = actions[theta_ind]
 
         thresholds.append (theta)
-        # TODO End of not tested part of the code
     return thresholds 
 
 def plotThresholds (df, attack_df):
@@ -518,7 +548,8 @@ def createUtilityHistogram ():
 def doAllPlots ():
     df = processPcap ("18-06-01-short.pcap")
     attack_df = parseAnnotation ("00166cab6b88.csv")
-    plotThresholds (df, attack_df)
+    #plotThresholds (df, attack_df)
+    plotEntropy (df, attack_df)
     #createUtilityHistogram ()  
     pass
 
