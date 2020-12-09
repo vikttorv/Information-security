@@ -59,14 +59,17 @@ alpha = 0.1
 gamma = 0.8
 eps = 0.9
 actions_list_size = 51
-gamma_list_size = 52
-theta_list_size = 52
+#gamma_list_size = 52
+#theta_list_size = 52
+gamma_list_size = 3
+theta_list_size = 3
+
 
 
 episod_limit = 0
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
-max_events_counts = 20 # The maximum number of events saved in memory 
+max_events_counts = 1 # The maximum number of events saved in memory 
 
 
 # choice == True - traffic marked as malicious; choice == False - traffic marked as benign
@@ -155,7 +158,7 @@ def processPcap (input_pcap, mac_addr):
         #        count += 1
 
         elif IP in ether_pkt:
-            if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
+            if  ether_pkt.dst == mac_addr: 
                 ip_pkt = ether_pkt[IP] 
                 time = (time / 1000000) - GLOBAL_START_TIME
                 df["time"][count] = time
@@ -169,7 +172,7 @@ def processPcap (input_pcap, mac_addr):
                 count += 1   
                      
         elif ARP in ether_pkt:
-            if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
+            if  ether_pkt.dst == mac_addr: 
                 arp_pkt = ether_pkt[ARP]
                 #if arp_pkt.psrc == "0.0.0.0":
                 #    continue 
@@ -200,8 +203,8 @@ def parseAnnotation (filename):
 # only descrete number of states is available
 def getPossibleStates ():
     # -1000 is the case where gamma == 0 / 0 or theta == 0 / 0
-    possible_thetas = [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
-    possible_gammas = [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
+    possible_thetas = [0, 1, -1000] # [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
+    possible_gammas = [0, 1, -1000] # [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
     return (possible_gammas, possible_thetas)
 
 # only descrete number of actions (== theta values) is available
@@ -304,6 +307,7 @@ def getEventsCounters (attack_df, events):
     n_12 = 0 
     n_21 = 0 
     n_22 = 0 
+    event_type = 0
     for event in events:
         is_attack = False
         for ind in range (len(attack_df.index)):
@@ -314,9 +318,11 @@ def getEventsCounters (attack_df, events):
                  and event.end <= attack_df["end_time"][ind]):
                 if event.choise == True:
                     n_11 += 1
+                    event_type = 1
                     is_attack = True
                     break
                 else:
+                    event_type = 3
                     n_21 += 1
                     is_attack = True
                     break
@@ -324,11 +330,13 @@ def getEventsCounters (attack_df, events):
             continue
         else:
             if event.choise == True:
+                event_type = 2
                 n_12 += 1
             else:
+                event_type = 4
                 n_22 += 1
 
-    return [n_11, n_12, n_21, n_22]
+    return ([n_11, n_12, n_21, n_22], event_type)
 
 
 # TODO not tested
@@ -404,7 +412,7 @@ def getCurrentState (events_counters, states):
     return (target_ind1, target_ind2)
 
 # TODO Not tested
-def getTheta (q_table, state_ind, old_theta_ind):
+def getTheta (q_table, state_ind, old_theta_ind, last_event_type):
     """
     Returns the index of the maximum action for state with state_ind with probability that
     is equal to eps and the index of random action with probability that is equal to 1 - eps  
@@ -423,43 +431,62 @@ def getTheta (q_table, state_ind, old_theta_ind):
     """
     global eps, actions_list_size
     max_ind_array = np.where (q_table[state_ind] == np.amax (q_table[state_ind]))
-    
-    # find min distance
-    min_dist = actions_list_size
-    min_dist_ind = old_theta_ind
-    for ind in range (len (max_ind_array[0])):
-        dist = math.fabs (old_theta_ind - max_ind_array[0][ind])
-        if min_dist > dist:
-            min_dist = dist
-            min_dist_ind = max_ind_array[0][ind]
-    """
-    # find second min distance
-    second_min_dist = actions_list_size
-    for ind in range (len (max_ind_array[0])):
-        dist = math.fabs (old_theta_ind - max_ind_array[0][ind])
-        if second_min_dist > dist and dist != min_dist:
-            second_min_dist = dist
+    target_index = max_ind_array[0][0]
 
-    # find all elements with zero Q-table that are near the old state
-    small_dist_ind_array = []
-    for ind in range (len (max_ind_array[0])):
-        dist = math.fabs (old_theta_ind - max_ind_array[0][ind])
-        if dist == min_dist or dist == second_min_dist:
-            small_dist_ind_array.append (ind)
-    max_ind_ind = random.randint (0, len (small_dist_ind_array) - 1)
-    
-    final_ind = small_dist_ind_array[max_ind_ind]
-    """ 
-
-    if (random.uniform (0, 1) < eps):
-        return min_dist_ind
-    else:
-        if min_dist_ind == 0:
-            return random.randint (0, 2)
-        elif min_dist_ind == len (q_table[state_ind]) - 1:
-            return random.randint (min_dist_ind - 2, min_dist_ind)
+    if len (max_ind_array[0]) == 1:       
+        if (random.uniform (0, 1) < eps):
+            return target_index
         else:
-            return random.randint (min_dist_ind - 1, min_dist_ind + 1)
+            if target_index == 0:
+                return random.randint (0, 2)
+            elif target_index == len (q_table[state_ind]) - 1:
+                return random.randint (target_index - 2, target_index)
+            else:
+                return random.randint (target_index - 1, target_index + 1)
+    else:
+        if (random.uniform (0, 1) < eps):
+            # find min dist ind
+            min_dist = actions_list_size
+            min_dist_ind = old_theta_ind
+            for ind in range (len (max_ind_array[0])):
+                dist = math.fabs (old_theta_ind - max_ind_array[0][ind])
+                if min_dist > dist:
+                    min_dist = dist
+                    min_dist_ind = max_ind_array[0][ind]        
+            # authenticated true attacks or benign traffic flows
+            if last_event_type == 1 or last_event_type == 4:
+                return min_dist_ind
+            # false alarm
+            elif last_event_type == 2:
+                smaller_ind_array = []
+                for ind in max_ind_array[0]:
+                    if ind < old_theta_ind:
+                        smaller_ind_array.append (ind)
+                if len (smaller_ind_array) == 0:
+                    return min_dist_ind
+                else:
+                    return  smaller_ind_array[random.randint (0, len (smaller_ind_array) - 1)]
+            # real attacks, but missed
+            elif last_event_type == 3:
+                higher_ind_array = []
+                for ind in max_ind_array[0]:
+                    if ind > old_theta_ind:
+                        higher_ind_array.append (ind)
+                if len (higher_ind_array) == 0:
+                    return min_dist_ind
+                else:
+                    return higher_ind_array[random.randint (0, len (higher_ind_array) - 1)]
+            else:
+                print ("Fatal error: incorrect event type")
+                exit (-1)
+            return target_index
+        else:
+            if target_index == 0:
+                return random.randint (0, 2)
+            elif target_index == len (q_table[state_ind]) - 1:
+                return random.randint (target_index - 2, target_index)
+            else:
+                return random.randint (target_index - 1, target_index + 1)
 
 def getEntropyValues (df, attack_df):
     global episod_limit
@@ -479,19 +506,7 @@ def getEntropyValues (df, attack_df):
         else:
             entropy_values.append (getNormalizedEntropy (entropy_dict))
 
-    return entropy_values
-
-def plotEntropy (df, attack_df):
-    global episod_limit
-    entropy_values = getEntropyValues (df, attack_df)
-    plt.plot(np.arange (1, episod_limit + 2, 1), entropy_values, marker = 'None',
-             linestyle = '-', color = 'k', label = 'Entropy')
-    plt.xlabel('Time')
-    plt.ylabel('Entropy')
-    plt.grid()
-    plt.legend(loc='best')
-    plt.savefig("figures/entropy.png")
-    plt.plot ()    
+    return entropy_values 
 
 def getThresholds (df, attack_df):
     global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, episod_limit
@@ -540,19 +555,18 @@ def getThresholds (df, attack_df):
             constant_theta_events.pop (0)
         if len (events) > max_events_counts:
             events.pop (0)
-
-        events_counters = getEventsCounters (attack_df, events)
-        constant_theta_events_counters = getEventsCounters (attack_df, constant_theta_events)
-
-        if events_counters == (0, 0, 0, 0):
+             
+        ret = getEventsCounters (attack_df, events)
+        events_counters = ret[0]
+        last_event_type = ret[1]
+        constant_theta_events_counters = (getEventsCounters (attack_df, constant_theta_events))[0]
+        
+        if events_counters == [0, 0, 0, 0]:
             pass
         else:
             reward = getReward (events_counters)
             rewards.append (reward)
-
-            constant_theta_reward = getReward (constant_theta_events_counters)
-            rewards_constant.append (constant_theta_reward)   
-
+ 
             old_state = state
             state = getCurrentState (events_counters, states)
             q_table_state_ind = state[0] * theta_list_size + state[1]
@@ -562,11 +576,31 @@ def getThresholds (df, attack_df):
             alpha * (reward + gamma * q_table.max (axis = 1)[q_table_state_ind] - (
             q_table[q_table_state_ind_old][theta_ind])))
 
-            theta_ind = getTheta (q_table, q_table_state_ind, theta_ind)
+            theta_ind = getTheta (q_table, q_table_state_ind, theta_ind, last_event_type)
             theta = actions[theta_ind]
+
+        if constant_theta_events_counters == [0, 0, 0, 0]:
+            pass
+        else:
+            constant_reward = getReward (constant_theta_events_counters)
+            rewards_constant.append (constant_reward)            
 
         thresholds.append (theta)
     return (thresholds, rewards, rewards_constant) 
+
+def plotEntropy (df, attack_df, thresholds):
+    global episod_limit
+    entropy_values = getEntropyValues (df, attack_df)
+    plt.plot(np.arange (1, episod_limit + 2, 1), entropy_values, marker = 'None',
+             linestyle = '-', color = 'k', label = 'Entropy')
+    plt.plot(np.arange (0, episod_limit + 2, 1), thresholds, marker = 'None',
+             linestyle = '-', color = 'r', label = 'Threshold')
+    plt.xlabel ('Time')
+    plt.ylabel ('Normalized entropy')
+    plt.grid ()
+    plt.legend (loc='best')
+    plt.savefig ("figures/entropy.png")
+    plt.close ()
 
 def plotThresholds (df, attack_df):
     """
@@ -588,12 +622,13 @@ def plotThresholds (df, attack_df):
 
     plt.plot(np.arange (0, episod_limit + 2, 1), thresholds, marker = 'None',
              linestyle = '-', color = 'k', label = 'Threshold')
-    plt.xlabel('Time')
-    plt.ylabel('Threshold')
-    plt.grid()
-    plt.legend(loc='best')
-    plt.savefig("figures/threshold.png")
-    return (rewards, rewards_constant)
+    plt.xlabel ('Time')
+    plt.ylabel ('Threshold')
+    plt.grid ()
+    plt.legend (loc='best')
+    plt.savefig ("figures/threshold.png")
+    plt.close ()
+    return (rewards, rewards_constant, thresholds)
 
 def createUtilityHistogram (rewards_q_mod, rewards_const_mod):
     names = ['WeMo power switch', 'WeMo power switch']
@@ -614,17 +649,15 @@ def createUtilityHistogram (rewards_q_mod, rewards_const_mod):
     ax.set_xticks (x)
     ax.set_xticklabels (names)
     ax.legend ()
-    plt.savefig ("figures/utility.png")
-    plt.show ()    
+    plt.savefig ("figures/utility.png") 
     return
 
 def doAllPlots ():
     df = processPcap ("18-06-01-short.pcap", "ec:1a:59:79:f4:89")
     attack_df = parseAnnotation ("ec1a5979f489.csv")
     ret = plotThresholds (df, attack_df)
-    plotEntropy (df, attack_df)
+    plotEntropy (df, attack_df, ret[2])
     createUtilityHistogram (ret[0], ret[1])  
     return
-
 
 doAllPlots ()
