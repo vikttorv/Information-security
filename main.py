@@ -66,7 +66,7 @@ theta_list_size = 52
 episod_limit = 0
 episod_length = 300 # in seconds
 step_length = 5 # in seconds
-#window_size = 2 * 60 * 60
+max_events_counts = 20 # The maximum number of events saved in memory 
 
 
 # choice == True - traffic marked as malicious; choice == False - traffic marked as benign
@@ -76,7 +76,7 @@ class Event:
         self.end = end
         self.choise = choise
 
-def get_real_num_rows (input_pcap):
+def get_real_num_rows (input_pcap, mac_addr):
     global episod_limit
     num_rows = 0
     max_time_unix = 0
@@ -84,7 +84,7 @@ def get_real_num_rows (input_pcap):
         if max_time_unix == 0:
             max_time_unix =  ((pkt_metadata.tshigh << 32) | pkt_metadata.tslow) / 1000000
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.dst != "00:16:6c:ab:6b:88" and ether_pkt.src != "00:16:6c:ab:6b:88":
+        if ether_pkt.dst != mac_addr and ether_pkt.src != mac_addr:
             continue 
         #if IPv6 in ether_pkt:
         #    time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
@@ -105,7 +105,7 @@ def get_real_num_rows (input_pcap):
     return (num_rows, max_time_unix)
 
 
-def processPcap (input_pcap):
+def processPcap (input_pcap, mac_addr):
     """
     Parse .pcap file
 
@@ -121,24 +121,24 @@ def processPcap (input_pcap):
     """
     #pcap = rdpcap (input_pcap) 
     global GLOBAL_START_TIME, episod_limit
-    ret = get_real_num_rows (input_pcap)
+    ret = get_real_num_rows (input_pcap, mac_addr)
     num_rows = ret[0]
     end_time_unix = ret[1]
-    print ("num_rows = {}; end time unix = {}".format (num_rows, end_time_unix))
-    print (num_rows)
-    df = pd.DataFrame(index=range (num_rows), columns=['time', 'value'])
+    print ("num rows = {}; end time = ".format (num_rows), end='')
+    df = pd.DataFrame (index=range (num_rows), columns=['time', 'value'])
     is_start_time_set = False
     count = 0
     for (pkt_data, pkt_metadata,) in RawPcapReader (input_pcap):
         time = (pkt_metadata.tshigh << 32) | pkt_metadata.tslow
         if not is_start_time_set:
             GLOBAL_START_TIME = time / 1000000
+            print ("{}; num episods = ".format (end_time_unix - GLOBAL_START_TIME), end='')
             episod_limit = math.ceil ((end_time_unix - GLOBAL_START_TIME) / episod_length)
             print (episod_limit)
             is_start_time_set = True
 
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.dst != "00:16:6c:ab:6b:88" and ether_pkt.src != "00:16:6c:ab:6b:88":
+        if ether_pkt.dst != mac_addr and ether_pkt.src != mac_addr:
             continue
         #if IPv6 in ether_pkt:     
         #    if  ether_pkt.dst == "00:16:6c:ab:6b:88": 
@@ -292,6 +292,8 @@ def getEventsCounters (attack_df, events):
         The data frame with infromation about attack. You should get it from .csv table
     events : list of Event
         The list of events for each time step  
+    old_events_counters : tuple of ints 
+        The tuple old events counters
 
     Returns
     -------
@@ -325,8 +327,8 @@ def getEventsCounters (attack_df, events):
                 n_12 += 1
             else:
                 n_22 += 1
-                
-    return (n_11, n_12, n_21, n_22)
+
+    return [n_11, n_12, n_21, n_22]
 
 
 # TODO not tested
@@ -481,19 +483,19 @@ def getEntropyValues (df, attack_df):
 
 def plotEntropy (df, attack_df):
     global episod_limit
-    thresholds = getEntropyValues (df, attack_df)
-    plt.plot(np.arange (1, episod_limit + 2, 1), thresholds, marker = 'None',
+    entropy_values = getEntropyValues (df, attack_df)
+    plt.plot(np.arange (1, episod_limit + 2, 1), entropy_values, marker = 'None',
              linestyle = '-', color = 'k', label = 'Entropy')
     plt.xlabel('Time')
     plt.ylabel('Entropy')
     plt.grid()
     plt.legend(loc='best')
-    plt.savefig("figures/entropy.png")    
-
+    plt.savefig("figures/entropy.png")
+    plt.plot ()    
 
 def getThresholds (df, attack_df):
     global alpha, gamma, SECONDS_PER_DAY, episod_length, step_length, episod_limit
-    global gamma_list_size, theta_list_size, actions_list_size
+    global gamma_list_size, theta_list_size, actions_list_size, max_events_counts
 
     thresholds = []
     states = getPossibleStates ()
@@ -504,13 +506,16 @@ def getThresholds (df, attack_df):
     thresholds.append (theta)
     q_table = np.zeros((gamma_list_size * theta_list_size, actions_list_size))
 
-    # the window size will be one 1 hour or episod_length * 24.
-    # When data collection time reaches 2 hours, the device will delete the data from the first hour
-    first_hour_dict = dict ()
-    second_hour_dict = dict ()
     entropy_dict = dict ()
-    deleted_data_time = 0 # all data before this time were deleted
     events = []    
+    rewards = []
+    rewards_constant = []
+    constant_theta = theta
+    constant_theta_events = []
+
+    events_counters = [0, 0, 0, 0]
+    constant_theta_events_counters = [0, 0, 0, 0]
+
 
     for num_episod in range (0, episod_limit + 1, 1):
         entropy_dict = dict ()
@@ -521,16 +526,33 @@ def getThresholds (df, attack_df):
             pass
         elif getNormalizedEntropy (entropy_dict) < theta:
             events.append (Event (time_now, next_episod_time, True))
-            print (getNormalizedEntropy (entropy_dict))
         else:
             events.append (Event (time_now, next_episod_time, False))
-            print (getNormalizedEntropy (entropy_dict))
+
+        if len (entropy_dict) == 0 or len (entropy_dict) == 1:
+            pass
+        elif getNormalizedEntropy (entropy_dict) < constant_theta:
+            constant_theta_events.append (Event (time_now, next_episod_time, True))
+        else:
+            constant_theta_events.append (Event (time_now, next_episod_time, False))
+
+        if len (constant_theta_events) > max_events_counts:
+            constant_theta_events.pop (0)
+        if len (events) > max_events_counts:
+            events.pop (0)
 
         events_counters = getEventsCounters (attack_df, events)
+        constant_theta_events_counters = getEventsCounters (attack_df, constant_theta_events)
+
         if events_counters == (0, 0, 0, 0):
             pass
         else:
             reward = getReward (events_counters)
+            rewards.append (reward)
+
+            constant_theta_reward = getReward (constant_theta_events_counters)
+            rewards_constant.append (constant_theta_reward)   
+
             old_state = state
             state = getCurrentState (events_counters, states)
             q_table_state_ind = state[0] * theta_list_size + state[1]
@@ -544,7 +566,7 @@ def getThresholds (df, attack_df):
             theta = actions[theta_ind]
 
         thresholds.append (theta)
-    return thresholds 
+    return (thresholds, rewards, rewards_constant) 
 
 def plotThresholds (df, attack_df):
     """
@@ -558,7 +580,12 @@ def plotThresholds (df, attack_df):
         DataFrame with information about attacks        
     """   
     global episod_limit
-    thresholds = getThresholds (df, attack_df)
+ 
+    ret = getThresholds (df, attack_df)
+    thresholds = ret[0]
+    rewards = ret[1]
+    rewards_constant = ret[2]
+
     plt.plot(np.arange (0, episod_limit + 2, 1), thresholds, marker = 'None',
              linestyle = '-', color = 'k', label = 'Threshold')
     plt.xlabel('Time')
@@ -566,24 +593,38 @@ def plotThresholds (df, attack_df):
     plt.grid()
     plt.legend(loc='best')
     plt.savefig("figures/threshold.png")
+    return (rewards, rewards_constant)
 
-def createUtilityHistogram ():
-    # TODO Should be written
-    pass
+def createUtilityHistogram (rewards_q_mod, rewards_const_mod):
+    names = ['WeMo power switch', 'WeMo power switch']
+
+    static = [np.array (rewards_const_mod).mean (), np.array (rewards_const_mod).mean ()]
+    reinforcement = [np.array (rewards_q_mod).mean (), np.array (rewards_q_mod).mean ()]
+
+    x = np.arange(len(names))  # the label locations
+    width = 0.35  # the width of the bars
+
+    fig, ax = plt.subplots()
+    rects1 = ax.bar (x - width/2, static, width, label='Stat')
+    rects2 = ax.bar (x + width/2, reinforcement, width, label='RF')
+
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax.set_ylabel ('Utility')
+    ax.set_title ('Static vs reinforcement')
+    ax.set_xticks (x)
+    ax.set_xticklabels (names)
+    ax.legend ()
+    plt.savefig ("figures/utility.png")
+    plt.show ()    
+    return
 
 def doAllPlots ():
-    df = processPcap ("18-06-01-short.pcap")
-    attack_df = parseAnnotation ("00166cab6b88.csv")
-    #plotThresholds (df, attack_df)
+    df = processPcap ("18-06-01-short.pcap", "ec:1a:59:79:f4:89")
+    attack_df = parseAnnotation ("ec1a5979f489.csv")
+    ret = plotThresholds (df, attack_df)
     plotEntropy (df, attack_df)
-    #createUtilityHistogram ()  
-    pass
-
-# possible state values
-
-
-# possible state values are discrete             
-
+    createUtilityHistogram (ret[0], ret[1])  
+    return
 
 
 doAllPlots ()
