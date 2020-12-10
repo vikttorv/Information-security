@@ -6,13 +6,8 @@ import sys
 from scapy.all import *
 import matplotlib.pyplot as plt
 
-
-SECONDS_PER_DAY = 86400 # number of seconds in day
-GLOBAL_START_TIME = 0
-episod_length = 300 # in seconds
-
 P_0 = 14 #reward in case the attack was detected (detection and attack)
-P_1 = 12 #reward if (no attack and no detection)
+P_1 = 2 #reward if (no attack and no detection)
 C_0 = 0 #penalty for sending an alarm
 C_1 = 3 #penalty if the alarm is false (detection and no attack)
 C_2 = 15 #penalty if the attack was missed (no detection and attack)
@@ -22,13 +17,15 @@ eps = 0.9
 actions_list_size = 51
 #gamma_list_size = 52
 #theta_list_size = 52
-gamma_list_size = 3
-theta_list_size = 3
-episod_limit = 0
-max_events_counts = 1 # The maximum number of events saved in memory 
+gamma_list_size = 22
+theta_list_size = 22
+#gamma_list_size = 3
+#theta_list_size = 3
+episod_limit = 51
+max_events_counts = 20 # The maximum number of events saved in memory 
 
 SECONDS_PER_DAY = 86400 # number of seconds in day
-GLOBAL_START_TIME = 0
+GLOBAL_START_TIME = 1527823211.8792
 episod_length = 300 # in seconds
 
 """
@@ -77,7 +74,6 @@ def processIp (input_pcap, mac_addr):
     pd.DataFrame
         DataFrame created from pcap file ('time' + 'value' columns)        
     """
-    #pcap = rdpcap (input_pcap) 
     global GLOBAL_START_TIME, episod_limit
     ret = getRealNumRows (input_pcap, mac_addr)
     num_rows = ret[0]
@@ -300,8 +296,8 @@ class Event:
 # only descrete number of states is available
 def getPossibleStates ():
     # -1000 is the case where gamma == 0 / 0 or theta == 0 / 0
-    possible_thetas = [0, 1, -1000] # [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
-    possible_gammas = [0, 1, -1000] # [state for state in np.arange (0, 1.02, 0.02)] + [-1000]
+    possible_thetas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
+    possible_gammas = [state for state in np.arange (0, 1.05, 0.05)] + [-1000]
     return (possible_gammas, possible_thetas)
 
 # only descrete number of actions (== theta values) is available
@@ -409,10 +405,10 @@ def getEventsCounters (attack_df, events):
         is_attack = False
         for ind in range (len(attack_df.index)):
             # attack happened
-            if (event.start >= attack_df["start_time"][ind] 
-                 and event.start < attack_df["end_time"][ind]) or (
-                 event.end > attack_df["start_time"][ind]
-                 and event.end <= attack_df["end_time"][ind]):
+            if (event.start >= (attack_df["start_time"][ind] + 0.5)
+                 and event.start < (attack_df["end_time"][ind]) - 0.5) or (
+                 event.end > (attack_df["start_time"][ind] + 0.5)) and (
+                 event.end <= (attack_df["end_time"][ind] - 0.5)):
                 if event.choise == True:
                     n_11 += 1
                     event_type = 1
@@ -487,12 +483,14 @@ def getCurrentState (events_counters, states):
         gamma_raw = float (events_counters[0]) / (float (events_counters[0]) +
                     float (events_counters[2])) 
 
+    theta_raw = 0
     if events_counters[1] + events_counters[3] == 0:
         theta_raw = -1000
     else:              
         theta_raw = float (events_counters[1]) / (float (events_counters[1]) +
                     float (events_counters[3]))
 
+    #print ("gamma_raw = {}; theta_raw = {}".format (gamma_raw, theta_raw))
     min_dist1 = 1
     target_ind1 = 0
     min_dist2 = 1
@@ -506,9 +504,27 @@ def getCurrentState (events_counters, states):
         if math.fabs (states[1][ind2] - theta_raw) <= min_dist2:
             min_dist2 = math.fabs (states[1][ind2] - theta_raw)
             target_ind2 = ind2
+    #print ("gamma = {}; theta = {}".format (states[0][target_ind1], states[1][target_ind2]))
     return (target_ind1, target_ind2)
 
-def getTheta (q_table, state_ind, old_theta_ind, last_event_type):
+def getLowerBoundActionInd (entropy, actions):
+    for ind in range (0, len(actions), 1):
+        if actions[ind] > entropy and ind != 0:
+            return ind - 1 
+        elif actions[ind] >= entropy and ind == 0:
+            return 0
+    return len (actions) - 1
+
+def getUpperBoundActionInd (entropy, actions):
+    for ind in range (len (actions) - 1, -1, -1):
+        if actions[ind] < entropy and ind != len (actions) - 1:
+            return ind + 1 
+        elif actions[ind] <= entropy and ind == len (actions) - 1:
+            return len(actions) - 1
+    return 0
+
+
+def getTheta (q_table, state_ind, old_theta_ind, last_event_type, entropy, actions):
     """
     Returns the index of the maximum action for state with state_ind with probability that
     is equal to eps and the index of random action with probability that is equal to 1 - eps  
@@ -528,17 +544,19 @@ def getTheta (q_table, state_ind, old_theta_ind, last_event_type):
     global eps, actions_list_size
     max_ind_array = np.where (q_table[state_ind] == np.amax (q_table[state_ind]))
     target_index = max_ind_array[0][0]
+    #print ("max ind array = {}".format (max_ind_array))
+
 
     if len (max_ind_array[0]) == 1:       
         if (random.uniform (0, 1) < eps):
             return target_index
         else:
-            if target_index == 0:
+            if old_theta_ind == 0:
                 return random.randint (0, 2)
-            elif target_index == len (q_table[state_ind]) - 1:
-                return random.randint (target_index - 2, target_index)
+            elif old_theta_ind == len (q_table[state_ind]) - 1:
+                return random.randint (old_theta_ind - 2, old_theta_ind)
             else:
-                return random.randint (target_index - 1, target_index + 1)
+                return random.randint (old_theta_ind - 1, old_theta_ind + 1)
     else:
         if (random.uniform (0, 1) < eps):
             # find min dist ind
@@ -551,22 +569,38 @@ def getTheta (q_table, state_ind, old_theta_ind, last_event_type):
                     min_dist_ind = max_ind_array[0][ind]        
             # authenticated true attacks or benign traffic flows
             if last_event_type == 1 or last_event_type == 4:
+                #print ("min_dist_ind = {}".format (min_dist_ind))
+                #print ("min_dist = {}".format (min_dist))
                 return min_dist_ind
             # false alarm
             elif last_event_type == 2:
+                target_ind = getLowerBoundActionInd (entropy, actions)
                 smaller_ind_array = []
                 for ind in max_ind_array[0]:
-                    if ind < old_theta_ind:
+                    if ind == target_ind - 1 or ind == target_ind - 2 or ind == target_ind or ind == target_ind - 3:
                         smaller_ind_array.append (ind)
                 if len (smaller_ind_array) == 0:
                     return min_dist_ind
                 else:
-                    return  smaller_ind_array[random.randint (0, len (smaller_ind_array) - 1)]
+                    return smaller_ind_array[random.randint (0, len (smaller_ind_array) - 1)]
             # real attacks, but missed
             elif last_event_type == 3:
+                target_ind = getUpperBoundActionInd (entropy, actions)
+                #higher_ind = min_dist_ind
+                #min_dist2 = actions_list_size
+                #for ind in max_ind_array[0]:
+                #    dist = math.fabs (higher_ind - old_theta_ind)
+                #    if ind > old_theta_ind and dist <= min_dist2:
+                #        higher_ind = ind
+                #        min_dist2 = dist
+
+                #if higher_ind == actions_list_size:
+                #    return min_dist_ind
+                #else:
+                #    return higher_ind
                 higher_ind_array = []
                 for ind in max_ind_array[0]:
-                    if ind > old_theta_ind:
+                    if ind == target_ind + 1 or ind == target_ind + 2 or ind == target_ind or ind == target_ind + 3:
                         higher_ind_array.append (ind)
                 if len (higher_ind_array) == 0:
                     return min_dist_ind
@@ -577,12 +611,12 @@ def getTheta (q_table, state_ind, old_theta_ind, last_event_type):
                 exit (-1)
             return target_index
         else:
-            if target_index == 0:
+            if old_theta_ind == 0:
                 return random.randint (0, 2)
-            elif target_index == len (q_table[state_ind]) - 1:
-                return random.randint (target_index - 2, target_index)
+            elif old_theta_ind == len (q_table[state_ind]) - 1:
+                return random.randint (old_theta_ind - 2, old_theta_ind)
             else:
-                return random.randint (target_index - 1, target_index + 1)
+                return random.randint (old_theta_ind - 1, old_theta_ind + 1)
 
 def getThresholds (df, attack_df):
     global alpha, gamma, SECONDS_PER_DAY, episod_length, episod_limit
@@ -634,6 +668,7 @@ def getThresholds (df, attack_df):
         ret = getEventsCounters (attack_df, events)
         events_counters = ret[0]
         last_event_type = ret[1]
+        #print ("events counters = {}; last event type = {}".format (events_counters, last_event_type))
         constant_theta_events_counters = (getEventsCounters (attack_df, constant_theta_events))[0]
         
         if events_counters == [0, 0, 0, 0]:
@@ -650,10 +685,14 @@ def getThresholds (df, attack_df):
             q_table[q_table_state_ind_old][theta_ind] = q_table[q_table_state_ind_old][theta_ind] + (
             alpha * (reward + gamma * q_table.max (axis = 1)[q_table_state_ind] - (
             q_table[q_table_state_ind_old][theta_ind])))
-
-            theta_ind = getTheta (q_table, q_table_state_ind, theta_ind, last_event_type)
+            #print ("Old state row in q-table after changing = {}".format (q_table[q_table_state_ind_old]))            
+            #print ("New state row in q-table = {}".format (q_table[q_table_state_ind]))            
+            if len (entropy_dict) == 1 or len (entropy_dict) == 0:
+                theta_ind = getTheta (q_table, q_table_state_ind, theta_ind, last_event_type, 0, actions)
+            else:
+                theta_ind = getTheta (q_table, q_table_state_ind, theta_ind, last_event_type, getNormalizedEntropy (entropy_dict), actions)
+            #print ("Theta ind = {}; theta = {}\n\n\n\n".format (theta_ind, actions[theta_ind]))
             theta = actions[theta_ind]
-
         if constant_theta_events_counters == [0, 0, 0, 0]:
             pass
         else:
@@ -748,7 +787,8 @@ def createUtilityHistogram (rewards_q_mod, rewards_const_mod):
 
     static = [np.array (rewards_const_mod).mean (), np.array (rewards_const_mod).mean ()]
     reinforcement = [np.array (rewards_q_mod).mean (), np.array (rewards_q_mod).mean ()]
-
+    print ("static = {}".format (static))
+    print ("rf = {}".format (reinforcement))
     x = np.arange(len(names))  # the label locations
     width = 0.35  # the width of the bars
 
@@ -783,11 +823,13 @@ def doAllPlots ():
     """
     Threshold and utility graphs for dst + src IP address + entropy for IP 
     """
-    #df = processIp ("18-06-01-short.pcap", "ec:1a:59:79:f4:89")
-    #attack_df = parseAnnotation ("ec1a5979f489.csv")
-    #ret = plotThresholds (df, attack_df)
-    #plotEntropyWithThreshold (df, ret[2])
-    #createUtilityHistogram (ret[0], ret[1])  
+    #df = processIp ("18-06-01-1-attack.pcap", "ec:1a:59:79:f4:89")
+    #df.to_csv ("df.csv", index=False)
+    df = pd.read_csv ("df.csv")
+    attack_df = parseAnnotation ("ec1a5979f489.csv")
+    ret = plotThresholds (df, attack_df)
+    plotEntropyWithThreshold (df, ret[2])
+    createUtilityHistogram (ret[0], ret[1])  
 
     """
     Traffic flow graph

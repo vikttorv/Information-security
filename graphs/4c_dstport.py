@@ -58,7 +58,7 @@ def get_real_num_rows (input_pcap):
 
     return (num_rows, max_time_unix)
 
-def processPcap (input_pcap):
+def processDstPort (input_pcap, mac_addr):
     """
     Parse .pcap file
 
@@ -91,7 +91,7 @@ def processPcap (input_pcap):
             is_start_time_set = True
 
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.src != "ec:1a:59:79:f4:89":
+        if ether_pkt.src != mac_addr:
             continue
         elif IP in ether_pkt:
             ip_pkt = ether_pkt[IP]

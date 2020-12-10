@@ -58,7 +58,7 @@ def get_real_num_rows (input_pcap):
 
     return (num_rows, max_time_unix)
 
-def processPcap (input_pcap):
+def processSrcPort (input_pcap, mac_addr):
     """
     Parse .pcap file
 
@@ -74,7 +74,7 @@ def processPcap (input_pcap):
     """
     #pcap = rdpcap (input_pcap)
     global GLOBAL_START_TIME, episod_limit
-    ret = get_real_num_rows (input_pcap)
+    ret = getRealNumRows (input_pcap, mac_addr)
     num_rows = ret[0]
     end_time_unix = ret[1]
     print ("num_rows = {}; end time unix = {}".format (num_rows, end_time_unix))
@@ -91,7 +91,7 @@ def processPcap (input_pcap):
             is_start_time_set = True
 
         ether_pkt = Ether (pkt_data)
-        if ether_pkt.dst != "ec:1a:59:79:f4:89":
+        if ether_pkt.dst != mac_addr:
             continue
         elif IP in ether_pkt:
             ip_pkt = ether_pkt[IP]
